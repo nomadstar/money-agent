@@ -12,3 +12,4 @@ ledger/verifier.log
 .telegraph_token
 run/actuation_returns/
 run/bets.lock
+solana_sentinel/config.py

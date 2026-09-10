@@ -30,6 +30,7 @@ LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "180"))
 
 # Telegram Bot
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+OPERATOR_TELEGRAM_ID = os.getenv("OPERATOR_TELEGRAM_ID", "")
 
 # Server Configuration
 SERVER_HOST = os.getenv("SERVER_HOST", "0.0.0.0")
