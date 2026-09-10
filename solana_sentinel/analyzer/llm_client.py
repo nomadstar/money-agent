@@ -36,7 +36,7 @@ class LocalLLMClient:
             "stream": False,
             "options": {
                 "temperature": 0.2,
-                "num_ctx": 16384,
+                "num_ctx": 4096,
             },
         }
         if system:

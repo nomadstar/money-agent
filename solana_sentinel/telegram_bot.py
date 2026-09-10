@@ -23,6 +23,7 @@ from solana_sentinel.config import (
 from solana_sentinel.solana_pay import create_solana_pay_url, PaymentValidator
 from solana_sentinel.analyzer.contract_auditor import ContractAuditor
 from solana_sentinel.analyzer.token_scanner import TokenScanner
+from solana_sentinel.bounty_hunter import BountyHunter
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("solana_sentinel.telegram")
@@ -30,6 +31,8 @@ logger = logging.getLogger("solana_sentinel.telegram")
 validator = PaymentValidator()
 auditor = ContractAuditor()
 scanner = TokenScanner()
+hunter = BountyHunter()
+cached_bounties = []
 
 
 def is_operator(user_id: int) -> bool:
@@ -47,14 +50,19 @@ async def start_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "🛡️ <b>Bienvenido a Solana Sentinel AI</b>\n\n"
         f"{op_status}"
-        "Soy un agente autónomo de auditoría de seguridad y análisis on-chain en Solana.\n\n"
-        "<b>Comandos disponibles:</b>\n"
+        "Soy un agente autónomo de auditoría de seguridad y cazador de recompensas Web3.\n\n"
+        "<b>Comandos de Caza de Dinero (Bounties):</b>\n"
+        "• <code>/hunt</code> — Escanear bounties abiertos en Solana (Superteam Earn).\n"
+        "• <code>/solve &lt;número&gt;</code> — Generar solución técnica con IA para postular.\n\n"
+        "<b>Servicios de Seguridad (Cobro por consulta):</b>\n"
         "• <code>/audit &lt;código Rust / Anchor&gt;</code> — Auditar un smart contract de Solana.\n"
         "• <code>/scan &lt;dirección Mint&gt;</code> — Análisis de seguridad y rug-check de un token.\n"
+        "• <code>/balance</code> — Consultar el saldo en vivo de la billetera.\n"
     )
     if is_operator(user_id):
-        text += "• <code>/testaudit &lt;código&gt;</code> — Auditoría instantánea sin pago (Operador).\n"
-        text += "• <code>/testscan &lt;mint&gt;</code> — Escaneo instantáneo sin pago (Operador).\n"
+        text += "\n<b>Comandos de Operador:</b>\n"
+        text += "• <code>/testaudit &lt;código&gt;</code> — Auditoría instantánea sin pago.\n"
+        text += "• <code>/testscan &lt;mint&gt;</code> — Escaneo instantáneo sin pago.\n"
 
     text += (
         f"\n💳 <b>Pagos descentralizados con Solana Pay:</b>\n"
@@ -179,7 +187,8 @@ async def test_audit_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     msg = await update.message.reply_html("⚙️ <i>Ejecutando auditoría gratuita de operador...</i>")
-    res = auditor.generate_audit_report(text)
+    loop = asyncio.get_running_loop()
+    res = await loop.run_in_executor(None, auditor.generate_audit_report, text)
     score = res.get("score", 90)
     report_text = f"📊 <b>Reporte de Auditoría (Operador)</b>\n<b>Score:</b> {score}/100\n\n<pre>{html.escape(res.get('report_markdown', '')[:3500])}</pre>"
     await update.message.reply_html(report_text)
@@ -280,6 +289,101 @@ async def poll_and_deliver(
     )
 
 
+async def balance_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    lamports = validator.rpc.get_balance(SOLANA_RECIPIENT)
+    sol = lamports / 1_000_000_000
+    solscan_url = f"https://solscan.io/account/{SOLANA_RECIPIENT}"
+    text = (
+        f"💼 <b>Estado de la Billetera del Agente</b>\n\n"
+        f"• <b>Dirección:</b> <code>{SOLANA_RECIPIENT}</code>\n"
+        f"• <b>Saldo Actual:</b> <code>{sol:,.4f} SOL</code>\n"
+        f"• <b>Lamports:</b> <code>{lamports:,}</code>\n\n"
+        f"🔍 <a href=\"{solscan_url}\">Ver historial en vivo en Solscan</a>"
+    )
+    await update.message.reply_html(text, disable_web_page_preview=True)
+
+
+async def hunt_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global cached_bounties
+    msg = await update.message.reply_html("🔍 <i>Buscando bounties abiertos en Solana (Superteam Earn)...</i>")
+    try:
+        cached_bounties = hunter.scan_for_opportunities()
+        if not cached_bounties:
+            await msg.edit_text("No se encontraron bounties abiertos en este momento.")
+            return
+
+        text = "🎯 <b>Bounties Abiertos en Solana (Superteam Earn)</b>\n\n"
+        for idx, b in enumerate(cached_bounties[:5], 1):
+            reward = f"{b.get('rewardAmount')} {b.get('token')}"
+            deadline = str(b.get('deadline', ''))[:10]
+            text += (
+                f"<b>{idx}. {html.escape(b.get('title', ''))}</b>\n"
+                f"• <b>Recompensa:</b> <code>{reward}</code>\n"
+                f"• <b>Fecha Límite:</b> {deadline}\n"
+                f"• <b>Slug:</b> <code>{b.get('slug')}</code>\n\n"
+            )
+        text += (
+            "💡 <i>Escribe <code>/solve &lt;número&gt;</code> (ej: <code>/solve 1</code>) "
+            "para que Qwen 14B analice los requisitos y genere la solución técnica lista para postular.</i>"
+        )
+        await msg.edit_text(text, parse_mode="HTML")
+    except Exception as e:
+        await msg.edit_text(f"Error al buscar bounties: {e}")
+
+
+async def solve_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global cached_bounties
+    args = context.args
+    if not args or not args[0].isdigit():
+        await update.message.reply_html(
+            "Uso: <code>/solve &lt;número&gt;</code> (ej: <code>/solve 1</code> tras ver la lista con <code>/hunt</code>)"
+        )
+        return
+
+    idx = int(args[0]) - 1
+    if not cached_bounties:
+        cached_bounties = hunter.scan_for_opportunities()
+
+    if idx < 0 or idx >= len(cached_bounties):
+        await update.message.reply_html("Número inválido. Usa primero <code>/hunt</code> para ver los bounties.")
+        return
+
+    bounty = cached_bounties[idx]
+    title = bounty.get("title", "")
+    reward = f"{bounty.get('rewardAmount')} {bounty.get('token')}"
+    claim_url = f"https://superteam.fun/earn/bounties/{bounty.get('slug')}"
+
+    status_msg = await update.message.reply_html(
+        f"⚙️ <i>Analizando y resolviendo bounty:</i>\n<b>{html.escape(title)}</b>\n\n"
+        f"<i>El modelo Qwen 14B está generando el código y la solución técnica en tu GPU (~25 segundos)...</i>"
+    )
+
+    try:
+        loop = asyncio.get_running_loop()
+        evaluation = await loop.run_in_executor(None, hunter.evaluate_bounty_viability, bounty)
+        solution = await loop.run_in_executor(None, hunter.solve_bounty, bounty, evaluation)
+
+        response_text = (
+            f"🏆 <b>Solución de Bounty Generada por la IA</b>\n\n"
+            f"• <b>Bounty:</b> {html.escape(title)}\n"
+            f"• <b>Premio:</b> <code>{reward}</code>\n"
+            f"• <b>Categoría:</b> {evaluation.get('task_category')}\n"
+            f"• <b>Confianza IA:</b> {evaluation.get('confidence_score')}%\n\n"
+            f"<b>Propuesta Técnica / Código:</b>\n"
+            f"<pre>{html.escape(solution[:3500])}</pre>\n\n"
+            f"🔗 <a href=\"{claim_url}\">Abrir en Superteam Earn para enviar solución y cobrar</a>"
+        )
+        await context.bot.send_message(
+            chat_id=update.effective_chat.id,
+            text=response_text,
+            parse_mode="HTML",
+            disable_web_page_preview=True,
+        )
+        await status_msg.delete()
+    except Exception as e:
+        await status_msg.edit_text(f"Error generando solución: {e}")
+
+
 def run_telegram_bot(token: Optional[str] = None):
     bot_token = token or TELEGRAM_BOT_TOKEN
     if not bot_token:
@@ -287,6 +391,9 @@ def run_telegram_bot(token: Optional[str] = None):
 
     app = ApplicationBuilder().token(bot_token).build()
     app.add_handler(CommandHandler("start", start_cmd))
+    app.add_handler(CommandHandler("balance", balance_cmd))
+    app.add_handler(CommandHandler("hunt", hunt_cmd))
+    app.add_handler(CommandHandler("solve", solve_cmd))
     app.add_handler(CommandHandler("audit", audit_cmd))
     app.add_handler(CommandHandler("scan", scan_cmd))
     app.add_handler(CommandHandler("testaudit", test_audit_cmd))
