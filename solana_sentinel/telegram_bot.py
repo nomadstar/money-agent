@@ -34,7 +34,7 @@ scanner = TokenScanner()
 
 def is_operator(user_id: int) -> bool:
     try:
-        return str(user_id) == str(OPERATOR_TELEGRAM_ID)
+        return bool(OPERATOR_TELEGRAM_ID) and str(user_id) == str(OPERATOR_TELEGRAM_ID)
     except Exception:
         return False
 
